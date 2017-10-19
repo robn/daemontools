@@ -1,0 +1,9 @@
+[Unit]
+Description=Daemontools service supervision
+
+[Service]
+ExecStart=/usr/bin/svscanboot /etc/service/
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

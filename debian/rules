@@ -1,0 +1,107 @@
+#!/usr/bin/make -f
+
+STRIP =strip
+ifneq (,$(findstring nostrip,$(DEB_BUILD_OPTIONS)))
+  STRIP =: nostrip
+endif
+
+DIR =$(shell pwd)/debian/daemontools
+
+patch: deb-checkdir patch-stamp
+patch-stamp:
+	for i in `ls -1 debian/diff/*.diff || :`; do \
+	  patch -p1 <$$i || exit 1; \
+	done
+	touch patch-stamp
+
+build: deb-checkdir build-stamp
+build-stamp: patch-stamp
+	cd daemontools-0.76 && package/compile
+	touch build-stamp
+
+clean: deb-checkdir deb-checkuid
+	rm -rf daemontools-0.76/compile daemontools-0.76/command
+	test ! -e patch-stamp || \
+	  for i in `ls -1r debian/diff/*.diff || :`; do patch -p1 -R <$$i; done
+	rm -f patch-stamp build-stamp
+	rm -rf '$(DIR)' '$(DIR)'-run
+	rm -f debian/files debian/substvars changelog
+
+install: install-arch install-indep
+install-arch: deb-checkdir deb-checkuid build-stamp
+	# daemontools
+	rm -rf '$(DIR)'
+	#  programs
+	install -d -m0755 '$(DIR)'/usr/bin
+	install -m0755 daemontools-0.76/command/* '$(DIR)'/usr/bin/
+	for i in envdir envuidgid fghack multilog pgrphack readproctitle \
+	 setlock setuidgid softlimit supervise svc svok svscan svstat tai64n \
+	 tai64nlocal; do \
+	  $(STRIP) -R .comment -R .note '$(DIR)'/usr/bin/$$i || exit 1; \
+	done
+	sed -e 's}/command/svc}svc};s}/service}/etc/service}g' \
+	  <'$(DIR)'/usr/bin/svscanboot >'$(DIR)'/usr/bin/svscanboot'{new}'
+	cat '$(DIR)'/usr/bin/svscanboot'{new}' >'$(DIR)'/usr/bin/svscanboot
+	rm -f '$(DIR)'/usr/bin/svscanboot'{new}'
+	#  manpages
+	install -d -m0755 '$(DIR)'/usr/share/man/man8
+	for i in debian/daemontools-man/*.8; do \
+	  install -m0644 $$i '$(DIR)'/usr/share/man/man8/ && \
+	  gzip -9 '$(DIR)'/usr/share/man/man8/$${i##*/} || exit 1; \
+	done
+	#  changelog
+	test -r changelog || ln -s daemontools-0.76/src/CHANGES changelog
+install-indep: deb-checkdir deb-checkuid
+	# daemontools-run
+	rm -rf '$(DIR)'-run
+	install -d -m0755 '$(DIR)'-run/etc/service
+	install -d -m0755 '$(DIR)'-run/var/lib/supervise
+	#  update-service
+	install -d -m0755 '$(DIR)'-run/usr/sbin
+	install -m0755 debian/update-service \
+	  '$(DIR)'-run/usr/sbin/update-service
+	install -d -m0755 '$(DIR)'-run/usr/share/man/man8
+	install -m0644 debian/update-service.8 '$(DIR)'-run/usr/share/man/man8/
+	gzip -9 '$(DIR)'-run/usr/share/man/man8/update-service.8
+	#  systemd service
+	install -d -m0755 '$(DIR)'-run/lib/systemd/system
+	install -m0644 debian/systemd/daemontools.service \
+	  '$(DIR)'-run/lib/systemd/system/
+
+	#  workaround #767933
+	install -d -m0755 '$(DIR)'-run/usr/share/daemontools-run
+	#  copy from sysvinit-2.88dsf/debian/rules and adjust
+	if test -e debian/share/inittab.$(DEB_HOST_GNU_TYPE) ; \
+	then \
+		install -m0644 \
+			debian/share/inittab.$(DEB_HOST_GNU_TYPE) \
+			'$(DIR)'-run/usr/share/daemontools-run/inittab ; \
+	elif test -e debian/share/inittab.$(DEB_HOST_GNU_SYSTEM) ; \
+	then \
+		install -m0644 \
+			debian/share/inittab.$(DEB_HOST_GNU_SYSTEM) \
+			'$(DIR)'-run/usr/share/daemontools-run/inittab ; \
+	else \
+		install -m0644 debian/share/inittab \
+			'$(DIR)'-run/usr/share/daemontools-run/inittab ; \
+	fi
+	#  end copy from sysvinit-2.88dsf
+
+	#  changelog
+	test -r changelog || ln -s daemontools-0.76/src/CHANGES changelog
+
+binary: binary-arch binary-indep
+binary-arch: install-arch daemontools.deb
+	dpkg-shlibdeps '$(DIR)'/usr/bin/*
+	dpkg-gencontrol -isp -pdaemontools -P'$(DIR)'
+	dpkg -b '$(DIR)' ..
+binary-indep: install-indep daemontools-run.deb
+	dpkg-gencontrol -isp -pdaemontools-run -P'$(DIR)'-run
+	dpkg -b '$(DIR)'-run ..
+
+binary: binary-indep binary-arch
+
+.PHONY: patch build clean install install-arch install-indep binary \
+	  binary-arch binary-indep
+
+include debian/implicit
